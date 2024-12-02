@@ -2,6 +2,7 @@
     "files.associations": {
         "*.go": "go",
         "socketcall.h": "c",
-        "socket.h": "c"
+        "socket.h": "c",
+        "complex": "c"
     }
 }
