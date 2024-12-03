@@ -7,8 +7,19 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <errno.h>
 
 int server_socket;
+int client_socket_id[2]; // 2개의 유저만 테스트
+int isStart = 0;
+int test_index = -1; // 추후에 유저 아이디로 변환
+
+pthread_mutex_t mutex;
+struct Info
+{
+    int index;
+    int client_socket;
+};
 
 void handle_signal(int sig)
 {
@@ -17,10 +28,54 @@ void handle_signal(int sig)
     exit(0);
 }
 
+void handle_recv_send_err(int flag, int client_socket)
+{
+    if (flag <= 0)
+    {
+        if (flag == 0)
+        {
+            // 클라이언트가 정상적으로 연결을 종료한 경우
+            printf("클라이언트가 연결을 정상 종료했습니다.\n");
+        }
+        else if (errno == ECONNRESET)
+        {
+            // 클라이언트가 강제 종료된 경우
+            printf("클라이언트가 강제 종료되었습니다.\n");
+        }
+        else
+        {
+            // 기타 오류
+            perror("recv/send 오류");
+        }
+
+        // 공통적으로 소켓 정리
+        close(client_socket);
+        pthread_exit(NULL);
+    }
+}
+
 void *handle_client(void *arg)
 {
-    int client_socket = *(int *)arg;
-    printf("클라이언트 별도 쓰레드 할당\n");
+
+    struct Info *info = (struct Info *)arg;
+    int client_socket = info->client_socket;
+    client_socket_id[info->index] = client_socket;
+    int peer_client_socket;
+
+    while (!isStart)
+    {
+        printf("다른 클라이언트 찾는 중\n");
+        sleep(2);
+    }
+
+    for (int i = 0; i < 2; i++)
+    {
+        if (client_socket_id[i] != client_socket)
+        {
+            peer_client_socket = client_socket_id[i];
+            break;
+        }
+    }
 
     while (1)
     {
@@ -28,30 +83,11 @@ void *handle_client(void *arg)
         memset(request_message, '\0', sizeof(request_message));
 
         int bytes_received = recv(client_socket, request_message, sizeof(request_message), 0);
-        if (bytes_received <= 0)
-        {
-            if (bytes_received == 0)
-            {
-                // 클라이언트가 정상적으로 연결을 종료
-                printf("클라이언트가 연결을 종료했습니다.\n");
-                if (close(client_socket) < 0)
-                {
-                    perror("클라이언트 소켓 닫기 실패");
-                }
-                pthread_exit(NULL);
-            }
-            else if (bytes_received < 0)
-            {
-                // 오류 처리
-                perror("recv 오류");
-                if (close(client_socket) < 0)
-                {
-                    perror("클라이언트 소켓 닫기 실패");
-                }
-                pthread_exit(NULL);
-            }
-        }
+        handle_recv_send_err(bytes_received, client_socket);
         printf("클라이언트가 보낸 메세지 : %s\n", request_message);
+
+        send(client_socket, request_message, strlen(request_message), 0);
+        send(peer_client_socket, request_message, strlen(request_message), 0);
     }
 }
 
@@ -112,16 +148,30 @@ void ListenServer()
         // accept()에서 클라이언트 socket 받고, 쓰레드를 생성해서 별도로 recv(), send() 하기
         // 싱글 쓰레드로 recv를 무한정 기다리니까 다른 새 클라이언트가 서비스를 이용 못 함(근데 연결(3-way-handshake)은 됨)
         pthread_t thread;
-        pthread_create(&thread, NULL, handle_client, (void *)&client_socket);
+        int ret;
+        // 테스트용 유저 정보 생성
+        test_index++;
+
+        struct Info testInfo;
+        testInfo.client_socket = client_socket;
+        printf("client socket : %d\n", client_socket);
+
+        testInfo.index = test_index;
+
+        if (test_index == 1)
+        {
+            isStart = 1;
+        }
+        ret = pthread_create(&thread, NULL, handle_client, (void *)&testInfo);
+        if (ret != 0)
+        {
+            perror("쓰레드 생성 오류");
+            close(client_socket); // 서버에서 연결 종료 -> timeout -> 보안 문제
+        }
 
         // 다른 클라이언트를 기다리지 않고, 개별적으로 처리
         pthread_detach(thread);
-        // 클라이언트 마다 쓰레드를 만들어주기는 하는데 이제 쓰레드가 종료 될 때 독립적으로 그 하나만 잘 종료될 수 있게 join을 하지 않고 distach를 한다.
-
-        // if (close(server_socket) < 0)
-        // {
-        //     perror("서버 소켓 닫기 실패");
-        // }
+        // 클라이언트 마다 쓰레드를 만들어주기는 하는데 이제 쓰레드가 종료 될 때 독립적으로 그 하나만 잘 종료될 수 있게 join을 하지 않고 detach 한다.
     }
 }
 
@@ -129,6 +179,7 @@ int main()
 {
     signal(SIGINT, handle_signal);
     printf("Hello, Server!\n");
+    memset(client_socket_id, 0, sizeof(client_socket_id) / sizeof(int));
     ListenServer();
     return 0;
 }
