@@ -86,7 +86,6 @@ void *handle_client(void *arg)
         handle_recv_send_err(bytes_received, client_socket);
         printf("클라이언트가 보낸 메세지 : %s\n", request_message);
 
-        send(client_socket, request_message, strlen(request_message), 0);
         send(peer_client_socket, request_message, strlen(request_message), 0);
     }
 }
